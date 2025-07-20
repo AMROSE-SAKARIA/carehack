@@ -1,0 +1,272 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+
+// --- Game Configuration ---
+// The first scenario is hardcoded to ensure a consistent start.
+const INITIAL_SCENARIO = {
+    title: "The Cat in the Tree",
+    goal: "Help the cat get down safely.",
+    characters: {
+      CHILD: { name: 'The Child', emoji: '👧', thought: "Oh no, my cat is stuck! I'm too small to reach.", action: { name: 'Call for Help', icon: '🗣️' } },
+      FIREFIGHTER: { name: 'The Firefighter', emoji: '👨‍🚒', thought: "A cat in a tree? I have the right tool for this job.", action: { name: 'Use Ladder', icon: '🪜' } },
+      CAT: { name: 'The Cat', emoji: '🐈', thought: "I'm so high up! It's scary to come down.", action: { name: 'Mew Loudly', icon: '🔊' } },
+    },
+    solution: 'FIREFIGHTER',
+    sceneEmoji: '🌳',
+};
+
+// --- Helper Components ---
+
+const CharacterButton = ({ character, onClick, isActive }) => (
+  <button
+    onClick={onClick}
+    className={`p-4 rounded-full transition-all duration-300 transform ${isActive ? 'bg-yellow-400 scale-110 shadow-lg' : 'bg-white/70 hover:bg-white'}`}
+  >
+    <div className="text-5xl">{character.emoji}</div>
+  </button>
+);
+
+const ActionButton = ({ action, onClick, disabled }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    className="flex items-center gap-4 px-6 py-4 bg-green-500 text-white font-bold text-2xl rounded-full shadow-lg hover:bg-green-600 transition-all transform hover:scale-105 disabled:opacity-50 disabled:bg-gray-400"
+  >
+    <div className="text-4xl">{action.icon}</div>
+    <span>{action.name}</span>
+  </button>
+);
+
+const SceneDisplay = ({ scenario, gameState }) => {
+    const isSuccess = gameState === 'success';
+    return (
+        <div className="relative w-full max-w-2xl h-96 bg-blue-200 rounded-2xl shadow-lg overflow-hidden border-8 border-white flex items-center justify-center">
+            <div className={`text-9xl transition-transform duration-700 ${isSuccess ? 'scale-150 rotate-12' : 'scale-100'}`}>
+                {isSuccess ? '✅' : scenario.sceneEmoji}
+            </div>
+        </div>
+    );
+};
+
+const CoachHint = ({ tip }) => (
+    <div className={`absolute bottom-40 md:bottom-48 w-full flex justify-center transition-opacity duration-500 ${tip ? 'opacity-100' : 'opacity-0'}`}>
+        <div className="bg-black/50 backdrop-blur-md p-4 rounded-xl max-w-lg text-center text-white font-semibold">
+            <span className="font-bold text-yellow-300">Coach's Tip:</span> {tip}
+        </div>
+    </div>
+);
+
+const LoadingScreen = ({ text }) => (
+    <div className="text-center">
+        <div className="text-6xl animate-spin mb-4">🎨</div>
+        <h2 className="text-3xl font-bold text-gray-700">{text}</h2>
+    </div>
+);
+
+
+// --- Main App Component ---
+export default function App() {
+  const [gameState, setGameState] = useState('intro'); // intro, playing, success, loading
+  const [currentScenario, setCurrentScenario] = useState(INITIAL_SCENARIO);
+  const [perspective, setPerspective] = useState(Object.keys(INITIAL_SCENARIO.characters)[0]);
+  const [wrongAttempts, setWrongAttempts] = useState(0);
+  const [coachTip, setCoachTip] = useState('');
+
+  const currentCharacter = currentScenario.characters[perspective];
+
+  // --- AI SCENARIO GENERATION ---
+  const generateAIScenario = async () => {
+    setGameState('loading');
+    setCoachTip('');
+
+    const prompt = `Generate a new, simple, child-friendly scenario for an empathy puzzle game. The scenario should have a clear problem and a solution that requires switching to the correct character's perspective. The output must be a valid JSON object following the specified schema.
+
+    Example of a good scenario:
+    - A cat is stuck in a tree. A child is worried but can't reach. A firefighter has a ladder. The solution is to use the firefighter's perspective.
+
+    Example of a bad scenario:
+    - A complex moral dilemma or a problem with no clear solution or required tool.
+
+    Ensure the "solution" character's action is a clear and direct solution to the "goal". The other characters' thoughts and actions should be logical for them, but not solve the main problem.`;
+
+    const schema = {
+        type: "OBJECT",
+        properties: {
+            title: { type: "STRING" },
+            goal: { type: "STRING" },
+            sceneEmoji: { type: "STRING" },
+            solution: { type: "STRING" },
+            characters: {
+                type: "OBJECT",
+                properties: {
+                    CHAR1: {
+                        type: "OBJECT",
+                        properties: {
+                            name: { type: "STRING" },
+                            emoji: { type: "STRING" },
+                            thought: { type: "STRING" },
+                            action: {
+                                type: "OBJECT",
+                                properties: { name: { type: "STRING" }, icon: { type: "STRING" } }
+                            }
+                        }
+                    },
+                    CHAR2: {
+                        type: "OBJECT",
+                        properties: {
+                            name: { type: "STRING" },
+                            emoji: { type: "STRING" },
+                            thought: { type: "STRING" },
+                            action: {
+                                type: "OBJECT",
+                                properties: { name: { type: "STRING" }, icon: { type: "STRING" } }
+                            }
+                        }
+                    },
+                    CHAR3: {
+                        type: "OBJECT",
+                        properties: {
+                            name: { type: "STRING" },
+                            emoji: { type: "STRING" },
+                            thought: { type: "STRING" },
+                            action: {
+                                type: "OBJECT",
+                                properties: { name: { type: "STRING" }, icon: { type: "STRING" } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+    const payload = {
+      contents: chatHistory,
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: schema,
+      },
+    };
+    const apiKey = ""; // API key will be injected by the environment
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+    try {
+      const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const result = await response.json();
+      const jsonText = result.candidates[0].content.parts[0].text;
+      const newScenario = JSON.parse(jsonText);
+      
+      const characterKeys = Object.keys(newScenario.characters);
+      const formattedScenario = {
+        ...newScenario,
+        characters: {
+            [characterKeys[0]]: newScenario.characters[characterKeys[0]],
+            [characterKeys[1]]: newScenario.characters[characterKeys[1]],
+            [characterKeys[2]]: newScenario.characters[characterKeys[2]],
+        },
+        solution: characterKeys.find(k => k === newScenario.solution) || characterKeys[Math.floor(Math.random() * characterKeys.length)]
+      };
+
+      setCurrentScenario(formattedScenario);
+      setPerspective(Object.keys(formattedScenario.characters)[0]);
+      setWrongAttempts(0);
+      setGameState('playing');
+    } catch (error) {
+      console.error("AI Scenario Generation Error:", error);
+      setCurrentScenario(INITIAL_SCENARIO);
+      setPerspective(Object.keys(INITIAL_SCENARIO.characters)[0]);
+      setGameState('playing');
+    }
+  };
+
+  const getAIFeedback = async () => {
+    setCoachTip('Thinking...');
+    const prompt = `You are a friendly and encouraging coach for a child playing an empathy game. The current goal is: "${currentScenario.goal}". The child is currently seeing the perspective of "${currentCharacter.name}" who thinks: "${currentCharacter.thought}". This perspective is not the correct one to solve the problem. Provide a short, gentle, one-sentence hint to encourage the child to think from another character's point of view to solve the problem. Don't give away the answer.`;
+    const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+    const payload = { contents: chatHistory };
+    const apiKey = "";
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    try {
+      const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const result = await response.json();
+      if (result.candidates && result.candidates.length > 0) {
+        setCoachTip(result.candidates[0].content.parts[0].text);
+      } else { setCoachTip("Good try! Is there someone else who might have a better idea?"); }
+    } catch (error) { setCoachTip("Think about who else is in the story. What can they do?"); }
+  };
+
+  const startGame = () => {
+    setCurrentScenario(INITIAL_SCENARIO);
+    setPerspective(Object.keys(INITIAL_SCENARIO.characters)[0]);
+    setWrongAttempts(0);
+    setCoachTip('');
+    setGameState('playing');
+  };
+
+  const handleAction = () => {
+    if (perspective === currentScenario.solution) {
+      setGameState('success');
+    } else {
+      const newAttempts = wrongAttempts + 1;
+      setWrongAttempts(newAttempts);
+      if (newAttempts >= 2) {
+        getAIFeedback();
+      }
+    }
+  };
+  
+  useEffect(() => {
+    setWrongAttempts(0);
+    setCoachTip('');
+  }, [perspective, currentScenario]);
+
+  return (
+    <main className="w-full h-screen bg-gradient-to-br from-purple-200 to-indigo-300 font-sans flex flex-col items-center justify-center p-4 gap-6">
+      <div className="text-center h-24">
+        <h1 className="text-5xl font-bold text-gray-800">Perspective Painters</h1>
+        {gameState !== 'intro' && gameState !== 'loading' && <p className="text-xl text-gray-600">{currentScenario.title}</p>}
+      </div>
+
+      {gameState === 'intro' && (
+        <button onClick={startGame} className="px-8 py-4 bg-indigo-500 text-white font-bold text-2xl rounded-full shadow-lg hover:bg-indigo-600 transition-all transform hover:scale-105 animate-pulse">
+          Start Story
+        </button>
+      )}
+      
+      {gameState === 'loading' && <LoadingScreen text="Painting a new story..." />}
+
+      {(gameState === 'playing' || gameState === 'success') && (
+        <>
+          <SceneDisplay scenario={currentScenario} gameState={gameState} />
+          <div className="flex items-center gap-6 p-4 bg-black/10 rounded-full">
+            {Object.keys(currentScenario.characters).map(charKey => (
+              <CharacterButton
+                key={charKey}
+                character={currentScenario.characters[charKey]}
+                onClick={() => setPerspective(charKey)}
+                isActive={perspective === charKey}
+              />
+            ))}
+          </div>
+          <div className="text-center w-full max-w-xl h-48">
+            <div className="p-4 bg-white rounded-xl shadow-md mb-4 min-h-[80px]">
+              <p className="text-lg italic text-gray-700">"{currentCharacter.thought}"</p>
+            </div>
+            {gameState === 'playing' ? (
+                <ActionButton action={currentCharacter.action} onClick={handleAction} />
+            ) : (
+                <div className="text-center animate-pulse">
+                    <h2 className="text-3xl font-bold text-green-600">Success!</h2>
+                    <p className="text-xl text-gray-700">{currentScenario.goal}</p>
+                    <button onClick={generateAIScenario} className="mt-4 px-6 py-3 bg-indigo-500 text-white font-bold rounded-full shadow-lg">
+                        Next Story
+                    </button>
+                </div>
+            )}
+          </div>
+          <CoachHint tip={coachTip} />
+        </>
+      )}
+    </main>
+  );
+}
